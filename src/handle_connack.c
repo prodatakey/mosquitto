@@ -84,12 +84,22 @@ int handle__connack(struct mosquitto *context)
 		}
 
 		/* receive-maximum */
-		inflight_maximum = context->msgs_out.inflight_maximum;
-		mosquitto_property_read_int16(properties, MQTT_PROP_RECEIVE_MAXIMUM, &inflight_maximum, false);
-		if(context->msgs_out.inflight_maximum != inflight_maximum){
-			context->msgs_out.inflight_maximum = inflight_maximum;
-			db__message_reconnect_reset(context);
+		uint16_t new_inflight_maximum = 0;
+        mosquitto_property_read_int16(properties, MQTT_PROP_RECEIVE_MAXIMUM, &new_inflight_maximum, false);
+		if (new_inflight_maximum > context->msgs_out.inflight_maximum){
+			uint16_t inflight_maximum_diff = new_inflight_maximum - context->msgs_out.inflight_maximum;
+			log__printf(NULL, MOSQ_LOG_DEBUG, "CONNACK: Increasing quota from %d/%d to %d/%d.", context->msgs_out.inflight_quota, context->msgs_out.inflight_maximum, context->msgs_out.inflight_quota + inflight_maximum_diff, new_inflight_maximum);
+			context->msgs_out.inflight_quota += inflight_maximum_diff;
+		} else if (new_inflight_maximum < context->msgs_out.inflight_maximum){
+			uint16_t inflight_maximum_diff = context->msgs_out.inflight_maximum - new_inflight_maximum;
+			uint16_t inflight_quota_reduced = (context->msgs_out.inflight_quota < inflight_maximum_diff) ? 0 : (context->msgs_out.inflight_quota - inflight_maximum_diff);
+			log__printf(NULL, MOSQ_LOG_DEBUG, "CONNACK: Decreasing quota from %d/%d to %d/%d.", context->msgs_out.inflight_quota, context->msgs_out.inflight_maximum, inflight_quota_reduced, new_inflight_maximum);
+			context->msgs_out.inflight_quota = inflight_quota_reduced;
 		}
+
+		context->msgs_out.inflight_maximum = new_inflight_maximum;
+		//if we do this we break the quota - since we're not considering what's already in flight
+		//context->msgs_out.inflight_quota = context->msgs_out.inflight_maximum;
 
 		/* retain-available */
 		if(mosquitto_property_read_byte(properties, MQTT_PROP_RETAIN_AVAILABLE,
