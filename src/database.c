@@ -390,10 +390,12 @@ void db__message_dequeue_first(struct mosquitto *context, struct mosquitto_msg_d
 }
 
 
+
 int db__message_delete_outgoing(struct mosquitto *context, uint16_t mid, enum mosquitto_msg_state expect_state, int qos)
 {
 	struct mosquitto_client_msg *tail, *tmp;
 	int msg_index = 0;
+	bool found_mid = false;
 
 	if(!context) return MOSQ_ERR_INVAL;
 
@@ -407,11 +409,28 @@ int db__message_delete_outgoing(struct mosquitto *context, uint16_t mid, enum mo
 			}
 			msg_index--;
 			db__message_remove_from_inflight(&context->msgs_out, tail);
+			found_mid = true;
 			break;
 		}
 	}
 
+	if(context->msgs_out.inflight_maximum != 0 && !found_mid){
+		//send quota has been incremented because we thought this is a valid ACK, but since it's invalid, send quota needs to be decremented again
+		util__decrement_send_quota(context);
+
+		//MOSQ_ERR_NOT_FOUND should be thrown if MID is invalid
+		return MOSQ_ERR_NOT_FOUND;
+	}
+
 	DL_FOREACH_SAFE(context->msgs_out.queued, tail, tmp){
+		if(context->msgs_out.inflight_maximum != 0){
+			if (msg_index >= context->msgs_out.inflight_maximum){
+				break;
+			}
+			else if (context->msgs_out.inflight_quota == 0){ //break if no quota left
+				break;
+			}
+		}
 		if(!db__ready_for_flight(context, mosq_md_out, tail->qos)){
 			break;
 		}
